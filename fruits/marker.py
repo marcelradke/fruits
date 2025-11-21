@@ -11,6 +11,7 @@ from builtin_interfaces.msg import Duration
 from cv_bridge import CvBridge
 import time
 
+from matplotlib import pyplot as plt
 import numpy as np
 import cv2
 
@@ -24,9 +25,14 @@ class Marker(Node):
 
 		self.sub_apple = self.create_subscription(ImageMarker, 'detection/apple',
 			self.apple_callback, 30)
-		self.sub_apple_time = self.create_subscription(Duration, 'detection/apple_duration',
-			self.apple_time_callback, 3)
-		self.apple_time_out= 1 #s #will be reset
+
+		# marker time out will be reset with next marker message
+		self.apple_time_out= 1 #s 
+		
+		# Plotting
+		cmap= plt.get_cmap('jet')
+		apple_colors= cmap(np.linspace(0,1,101))
+		self.apple_colors= (apple_colors[::-1,0:3]*255)
 						
 		self.bridge = CvBridge()
 		self.i = 0
@@ -37,21 +43,26 @@ class Marker(Node):
 	def image_callback(self, msg):
 		self.get_logger().info('Got Message')
 		img= self.bridge.imgmsg_to_cv2(msg, "bgr8")
-		print(type(img))
+		
+		# draw markers
 		img= self.update_image(img)
 		
+		# publish
 		msg= self.bridge.cv2_to_imgmsg(img, "bgr8")
 		self.image_pub.publish(msg)
 		self.get_logger().info(f'Publishing: {self.i}')
 		self.i += 1
 		
-	def apple_time_callback(self, msg):
-		self.apple_time_out= (msg.sec+(msg.nanosec/10e9)) / 2;
-		print('Set apple marker time out [s]: ', self.apple_time_out )
-		
-	
 	def apple_callback(self, msg):
-		self.get_logger().info('got apple')		
+		self.get_logger().info('got apple')
+		
+		# set marker duration
+		self.apple_time_out= msg.lifetime.sec+(msg.lifetime.nanosec/10e9) / 2;
+		self.get_logger().info(f'type duration {type(msg.lifetime)}')
+		s= f'Set apple marker time out [s]: {self.apple_time_out}'
+		self.get_logger().info(s)
+		
+		# add message
 		self.marker_buffer.append((msg,time.time()))
 		self.update_marker_buffer()
 
@@ -59,13 +70,24 @@ class Marker(Node):
 		t_now= time.time()
 		for msg,t in self.marker_buffer:
 				if msg.id == ImageMarker.CIRCLE:
-					c= (int(msg.position.x), int(msg.position.y))
+					# Postion
+					x= int(msg.position.x)
+					y= int(msg.position.y)
+					c= (x, y)
 					r= int(msg.scale)
-					cv2.circle(img, center= c, radius=r, color=(0, 255, 0), thickness=2)
+					# Color is defined by prediction confidence
+					conf= msg.outline_color.a
+					self.apple_colors[int(conf*100)]
+					rgb= self.apple_colors[int(conf*100)]
+					cv2.circle(img, center= c, radius=r, color= rgb, thickness=2)
+					img = cv2.putText(img, str(int(conf*100)), (int(x-10),int(y-r-2)),
+					                 cv2.FONT_HERSHEY_SIMPLEX, fontScale= 0.7, color= rgb, 
+					                 thickness= 2)
 		return img		
 	
 	def update_marker_buffer(self):
-		# delete all markers whose timeout is reached since last received marker message
+		# delete all markers whose timeout is reached 
+		# since last received marker message
 	  t_now= time.time()
 	  self.marker_buffer = [(msg,t) for msg,t in self.marker_buffer if t > t_now - self.apple_time_out]
 		
